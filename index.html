@@ -768,8 +768,7 @@ function createGLProgram(gl, fragSrc) {
 /* ============================================================
    SHADERS — shared header + per-shape main() functions
 ============================================================ */
-const SHADER_HEADER = `#extension GL_OES_standard_derivatives : enable
-precision highp float;
+const SHADER_HEADER = `precision highp float;
 uniform vec2 u_res;
 uniform float u_time;
 uniform vec3 u_c1, u_c2, u_c3;
@@ -1052,12 +1051,12 @@ void main(){
 // applied by the caller using the height value.
 const CONTOUR_HELPER = `
 float contourInk(float h, float freq){
-  // Distance from nearest contour value in screen space — gives a constant
-  // ~1.5-pixel line width regardless of how steep the height field is.
+  // Fixed-fraction line width, no fwidth, so it works on every WebGL1
+  // driver. 0.18 is roughly 9% of inter-contour distance, lands around
+  // 2 to 4 screen pixels for typical scales.
   float v = h * freq;
   float lines = abs(fract(v) - 0.5) * 2.0;
-  float fw = max(fwidth(v), 1e-4);
-  return 1.0 - smoothstep(0.0, fw * 2.0, lines);
+  return 1.0 - smoothstep(0.05, 0.18, lines);
 }
 vec3 landscapeShade(vec3 valley, vec3 peak, float h){
   // Hypsometric tint: low h sits in valley colour, high h climbs to peak.
