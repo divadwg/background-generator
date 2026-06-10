@@ -486,8 +486,8 @@ const presets = {
 };
 
 const shapes = {
-  smoke:     ['Smoke', 'Flame', 'Cellular', 'Ridged'],
-  particles: ['Flow field', 'Attractor', 'Vortex', 'Orbit'],
+  smoke:     ['Smoke', 'Spiral', 'Band', 'Flame', 'Cellular', 'Ridged'],
+  particles: ['Flow field', 'Depth', 'Attractor', 'Vortex', 'Orbit'],
   caustics:  ['Refraction', 'Ripple', 'Interference'],
   contours:  ['Topographic', 'Concentric', 'Spiral', 'Waveform'],
   wireframe: ['Mesh', 'Radial', 'Lattice'],
@@ -498,8 +498,11 @@ const shapes = {
 
 // Extra shape-specific presets that showcase non-default shapes
 presets.smoke['Inferno'] = { color1:'#1a0606', color2:'#ff4a14', color3:'#ffdd66', flowX:0.0, flowY:0.0, speed:0.5, scale:1.3, asymmetry:0.6, intensity:1.2, shape:'Flame' };
+presets.smoke['Vortex']  = { color1:'#070a18', color2:'#5e35b1', color3:'#ff6e40', flowX:0.0, flowY:0.0, speed:0.4, scale:1.4, asymmetry:1.0, intensity:1.0, shape:'Spiral' };
+presets.smoke['Mist']    = { color1:'#101418', color2:'#cfd8dc', color3:'#90a4ae', flowX:0.2, flowY:0.0, speed:0.5, scale:1.8, asymmetry:0.5, intensity:0.95, shape:'Band' };
 presets.particles['Clifford'] = { color1:'#06070f', color2:'#ffffff', color3:'#a0c8ff', flowX:-0.85, flowY:0.65, speed:0.6, scale:2.25, asymmetry:1.15, intensity:0.5, count:2400, size:0.7, trail:0.004, shape:'Attractor' };
 presets.particles['Galaxy']   = { color1:'#03030c', color2:'#ffd166', color3:'#e88a3a', flowX:0.0, flowY:0.0, speed:0.4, scale:1.5, asymmetry:0.5, intensity:1.0, count:1500, size:1.2, trail:0.02, shape:'Vortex' };
+presets.particles['Drift']    = { color1:'#040814', color2:'#7ec7ff', color3:'#ffffff', flowX:0.05, flowY:0.0, speed:0.4, scale:1.5, asymmetry:0.6, intensity:0.9, count:1800, size:2.0, trail:0.05, shape:'Depth' };
 presets.contours['Spiral']    = { color1:'#0c0c14', color2:'#cbb88e', color3:'#7c4dff', flowX:0.0, flowY:0.0, speed:0.2, scale:1.6, asymmetry:1.0, intensity:1.0, shape:'Spiral' };
 presets.dye['Whirlpool']      = { color1:'#04162c', color2:'#1a4a76', color3:'#7ad6ff', flowX:0.0, flowY:0.0, speed:0.6, scale:1.4, asymmetry:1.0, intensity:1.0, shape:'Vortex' };
 
@@ -765,7 +768,8 @@ function createGLProgram(gl, fragSrc) {
 /* ============================================================
    SHADERS — shared header + per-shape main() functions
 ============================================================ */
-const SHADER_HEADER = `precision highp float;
+const SHADER_HEADER = `#extension GL_OES_standard_derivatives : enable
+precision highp float;
 uniform vec2 u_res;
 uniform float u_time;
 uniform vec3 u_c1, u_c2, u_c3;
@@ -892,6 +896,63 @@ void main(){
 }
 `;
 
+const SMOKE_MAIN_SPIRAL = `
+void main(){
+  vec2 uv = (gl_FragCoord.xy - 0.5 * u_res) / u_res.y;
+  uv *= u_scale;
+  float t = u_time * u_speed;
+  vec2 p = uv + u_flow * t;
+
+  // Three drifting vortex centers warp the position into curving streams
+  for (int i = 0; i < 3; i++) {
+    float fi = float(i);
+    vec2 vc = vec2(sin(t * 0.25 + fi * 2.1), cos(t * 0.3 + fi * 1.7)) * (0.45 + fi * 0.08);
+    vec2 d = p - vc;
+    float vr = length(d);
+    float va = atan(d.y, d.x);
+    float swirl = 1.8 * exp(-vr * 1.1) * (0.6 + u_asymmetry * 0.7);
+    va += swirl;
+    p = vc + vec2(cos(va), sin(va)) * vr;
+  }
+
+  vec2 q = vec2(fbm(p), fbm(p + vec2(5.2, 1.3)));
+  vec2 r = vec2(fbm(p + 4.0*q + 0.2*t), fbm(p + 4.0*q + vec2(8.3, 2.8) + 0.18*t));
+  r += u_asymmetry * 0.3 * vec2(r.y, -r.x);
+  float f = fbm(p + 4.0*r);
+
+  vec3 col = mix(u_c1, u_c2, clamp(f * f * 3.2, 0.0, 1.0));
+  col = mix(col, u_c3, clamp(length(r) * 0.55, 0.0, 1.0));
+  col *= u_intensity * (0.55 + 0.65 * f);
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+const SMOKE_MAIN_BAND = `
+void main(){
+  vec2 uv = (gl_FragCoord.xy - 0.5 * u_res) / u_res.y;
+  vec2 uvScaled = uv * u_scale;
+  float t = u_time * u_speed;
+  vec2 p = uvScaled + u_flow * t;
+  // Stretch horizontally so smoke forms elongated layered band
+  p.x *= 0.5;
+
+  vec2 q = vec2(fbm(p), fbm(p + vec2(5.2, 1.3)));
+  vec2 r = vec2(fbm(p + 3.0*q + 0.2*t), fbm(p + 3.0*q + vec2(8.3, 2.8) + 0.15*t));
+  r += u_asymmetry * vec2(r.y, -r.x);
+  float f = fbm(p + 3.5*r);
+
+  // Soft horizontal gaussian band, centred vertically. Asymmetry widens it.
+  float bandWidth = 0.35 + u_asymmetry * 0.35;
+  float bandMask = exp(-pow(uv.y / bandWidth, 2.0));
+  float density = f * bandMask;
+
+  vec3 col = mix(u_c1, u_c2, clamp(density * density * 4.0, 0.0, 1.0));
+  col = mix(col, u_c3, clamp(length(r) * bandMask * 0.6, 0.0, 1.0));
+  col *= u_intensity * (0.5 + 0.7 * density);
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
 const SMOKE_MAIN_RIDGED = `
 void main(){
   vec2 uv = (gl_FragCoord.xy - 0.5 * u_res) / u_res.y;
@@ -913,13 +974,40 @@ void main(){
   vec2 uv = gl_FragCoord.xy / u_res.xy;
   vec2 p = (uv - 0.5);
   p.x *= u_res.x / u_res.y;
-  p *= u_scale;
+  p *= u_scale * 1.4;
   float t = u_time * u_speed;
   p += u_flow * t * 0.3;
-  p += u_asymmetry * vec2(sin(p.y * 2.0 + t), cos(p.x * 2.0 + t)) * 0.18;
-  float c = clamp(caustic(p, t), 0.0, 1.0);
-  vec3 col = mix(u_c1, u_c2, smoothstep(0.0, 0.5, c));
-  col = mix(col, u_c3, smoothstep(0.55, 1.0, c));
+
+  // Non-tiled caustic: iterative domain warping with sinusoidal displacement.
+  // Each pass curves the position more, building filamentary highlights that
+  // never repeat across the screen.
+  vec2 q = p;
+  float c = 0.0;
+  float amp = 0.55;
+  for (int i = 0; i < 5; i++) {
+    float fi = float(i + 1);
+    q += amp * vec2(
+      sin(q.y * 1.35 + t * 0.55 + fi),
+      cos(q.x * 1.35 - t * 0.5 + fi)
+    );
+    c += amp * sin(q.x * 1.5 + t * fi * 0.32) * cos(q.y * 1.5 - t * fi * 0.27);
+    amp *= 0.68;
+  }
+  // Asymmetric perturbation breaks any residual symmetry without tiling.
+  q += u_asymmetry * vec2(c, -c) * 0.4;
+  c += 0.35 * sin(q.x * 3.0 + t) * cos(q.y * 3.0 - t * 0.6);
+
+  c = abs(c) * 1.3;
+  c = pow(c, 1.4);
+  c = clamp(c, 0.0, 1.0);
+
+  // Smooth three-colour blend using overlapping weights — eliminates the
+  // hard-edged "solarised" ring that smoothstep boundaries used to create.
+  float w1 = exp(-c * 3.0);
+  float w2 = exp(-pow(c - 0.55, 2.0) * 7.0);
+  float w3 = smoothstep(0.45, 1.05, c);
+  float wt = w1 + w2 + w3 + 0.001;
+  vec3 col = (u_c1 * w1 + u_c2 * w2 + u_c3 * w3) / wt;
   col *= u_intensity;
   gl_FragColor = vec4(col, 1.0);
 }
@@ -942,8 +1030,11 @@ void main(){
     c += sin(d * 28.0 - t * 3.5) * exp(-d * 1.5) * 0.5;
   }
   c = pow(abs(c), 1.3);
-  vec3 col = mix(u_c1, u_c2, smoothstep(0.0, 0.6, c));
-  col = mix(col, u_c3, smoothstep(0.6, 1.2, c));
+  float w1 = exp(-c * 2.8);
+  float w2 = exp(-pow(c - 0.55, 2.0) * 6.0);
+  float w3 = smoothstep(0.5, 1.15, c);
+  float wt = w1 + w2 + w3 + 0.001;
+  vec3 col = (u_c1 * w1 + u_c2 * w2 + u_c3 * w3) / wt;
   col *= u_intensity;
   gl_FragColor = vec4(col, 1.0);
 }
@@ -965,11 +1056,30 @@ void main(){
     c += sin(dot(p * 9.0, dir) - t * (1.0 + fi * 0.25));
   }
   c = c / 4.0;
-  c = pow(abs(c), 2.5);
-  vec3 col = mix(u_c1, u_c2, smoothstep(0.0, 0.7, c));
-  col = mix(col, u_c3, smoothstep(0.6, 1.0, c));
+  c = pow(abs(c), 2.2);
+  float w1 = exp(-c * 3.2);
+  float w2 = exp(-pow(c - 0.5, 2.0) * 6.5);
+  float w3 = smoothstep(0.45, 1.0, c);
+  float wt = w1 + w2 + w3 + 0.001;
+  vec3 col = (u_c1 * w1 + u_c2 * w2 + u_c3 * w3) / wt;
   col *= u_intensity;
   gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+// Shared helper for crisp isolines: returns ink ∈ [0,1] with AA matched to
+// the screen-space derivative of the height field. Landscape shading is
+// applied by the caller using the height value.
+const CONTOUR_HELPER = `
+float contourInk(float h, float freq){
+  float v = h * freq;
+  float lines = abs(fract(v) - 0.5) * 2.0;
+  float fw = max(fwidth(v) * 1.4, 0.001);
+  return 1.0 - smoothstep(fw, fw + 0.04, lines);
+}
+vec3 landscapeShade(vec3 valley, vec3 peak, float h){
+  // Hypsometric tint: low h sits in valley colour, high h climbs to peak.
+  return mix(valley, peak, smoothstep(-1.4, 1.6, h));
 }
 `;
 
@@ -979,16 +1089,28 @@ void main(){
   vec2 p = (uv - 0.5);
   p.x *= u_res.x / u_res.y;
   p *= u_scale;
-  float t = u_time * u_speed * 0.3;
+  float t = u_time * u_speed * 0.25;
   p += u_flow * t;
-  float h = p.y * 1.2;
-  h += fbm(p * 0.7 + vec2(t, 0.0)) * 2.0 * (0.4 + u_asymmetry);
-  h += fbm(p * 2.0 + vec2(0.0, t * 0.6)) * 0.35;
-  float v = h * 9.0;
-  float lines = abs(fract(v) - 0.5) * 2.0;
-  float ink = 1.0 - smoothstep(0.0, 0.16, lines);
-  vec3 col = mix(u_c1, u_c2, ink);
-  col = mix(col, u_c3, smoothstep(-1.0, 1.0, h) * 0.18);
+
+  // Landscape height field: ridged-noise valleys + low-frequency drift so
+  // contours describe real-feeling dips and troughs, not flat ribbon noise.
+  float h = 0.0;
+  float amp = 0.6;
+  vec2 q = p * 0.6;
+  for (int i = 0; i < 6; i++) {
+    float n = noise(q + vec2(t * (1.0 + float(i)) * 0.08, 0.0));
+    // Half the octaves use a ridged variant for sharper peaks.
+    if (i == 1 || i == 3) n = 1.0 - abs(n * 2.0 - 1.0);
+    h += amp * n;
+    q = q * 2.07 + vec2(0.31, 0.57);
+    amp *= 0.55;
+  }
+  h = h * 3.2 - 1.0;
+  h += u_asymmetry * fbm(p * 0.5 + vec2(t * 0.3, 0.0)) * 0.8;
+
+  float ink = contourInk(h, 8.0);
+  vec3 base = landscapeShade(u_c1, u_c3, h);
+  vec3 col = mix(base, u_c2, ink);
   col *= u_intensity;
   gl_FragColor = vec4(col, 1.0);
 }
@@ -1000,15 +1122,16 @@ void main(){
   vec2 p = (uv - 0.5);
   p.x *= u_res.x / u_res.y;
   p *= u_scale;
-  float t = u_time * u_speed * 0.3;
+  float t = u_time * u_speed * 0.25;
   p += u_flow * t;
-  float h = length(p) * 4.0;
-  h += fbm(p * 0.7 + vec2(t, 0.0)) * 1.8 * (0.4 + u_asymmetry);
-  float v = h * 1.4;
-  float lines = abs(fract(v) - 0.5) * 2.0;
-  float ink = 1.0 - smoothstep(0.0, 0.16, lines);
-  vec3 col = mix(u_c1, u_c2, ink);
-  col = mix(col, u_c3, smoothstep(0.0, 3.0, h) * 0.18);
+
+  float h = length(p) * 3.0;
+  h += fbm(p * 0.7 + vec2(t, 0.0)) * 1.6 * (0.4 + u_asymmetry);
+  h += fbm(p * 2.0 + vec2(0.0, t)) * 0.4;
+
+  float ink = contourInk(h, 1.4);
+  vec3 base = landscapeShade(u_c1, u_c3, h - 1.0);
+  vec3 col = mix(base, u_c2, ink);
   col *= u_intensity;
   gl_FragColor = vec4(col, 1.0);
 }
@@ -1020,16 +1143,17 @@ void main(){
   vec2 p = (uv - 0.5);
   p.x *= u_res.x / u_res.y;
   p *= u_scale;
-  float t = u_time * u_speed * 0.3;
+  float t = u_time * u_speed * 0.25;
   p += u_flow * t;
+
   float ang = atan(p.y, p.x);
   float r = length(p);
-  float h = r * 5.0 - ang * (0.7 + u_asymmetry);
-  h += fbm(p * 1.0 + vec2(t, 0.0)) * 0.6;
-  float lines = abs(fract(h) - 0.5) * 2.0;
-  float ink = 1.0 - smoothstep(0.0, 0.16, lines);
-  vec3 col = mix(u_c1, u_c2, ink);
-  col = mix(col, u_c3, smoothstep(0.0, 5.0, h) * 0.15);
+  float h = r * 4.0 - ang * (0.7 + u_asymmetry);
+  h += fbm(p * 1.0 + vec2(t, 0.0)) * 0.7;
+
+  float ink = contourInk(h, 1.0);
+  vec3 base = landscapeShade(u_c1, u_c3, h * 0.3 - 0.5);
+  vec3 col = mix(base, u_c2, ink);
   col *= u_intensity;
   gl_FragColor = vec4(col, 1.0);
 }
@@ -1041,15 +1165,15 @@ void main(){
   vec2 p = (uv - 0.5);
   p.x *= u_res.x / u_res.y;
   p *= u_scale;
-  float t = u_time * u_speed * 0.5;
+  float t = u_time * u_speed * 0.4;
   p += u_flow * t;
-  float h = sin(p.x * 5.0 + t) + cos(p.y * 5.0 - t * 0.7);
-  h += fbm(p * 1.0 + vec2(t * 0.3, 0.0)) * 1.5 * u_asymmetry;
-  float v = h * 1.5;
-  float lines = abs(fract(v) - 0.5) * 2.0;
-  float ink = 1.0 - smoothstep(0.0, 0.16, lines);
-  vec3 col = mix(u_c1, u_c2, ink);
-  col = mix(col, u_c3, smoothstep(-1.0, 2.0, h) * 0.18);
+
+  float h = sin(p.x * 4.5 + t) + cos(p.y * 4.5 - t * 0.7);
+  h += fbm(p * 1.0 + vec2(t * 0.3, 0.0)) * 1.4 * u_asymmetry;
+
+  float ink = contourInk(h, 1.5);
+  vec3 base = landscapeShade(u_c1, u_c3, h * 0.5);
+  vec3 col = mix(base, u_c2, ink);
   col *= u_intensity;
   gl_FragColor = vec4(col, 1.0);
 }
@@ -1140,20 +1264,22 @@ void main(){
 const SHADER_SOURCES = {
   smoke: {
     'Smoke':    SHADER_HEADER + SMOKE_MAIN_DEFAULT,
+    'Spiral':   SHADER_HEADER + SMOKE_MAIN_SPIRAL,
+    'Band':     SHADER_HEADER + SMOKE_MAIN_BAND,
     'Flame':    SHADER_HEADER + SMOKE_MAIN_FLAME,
     'Cellular': SHADER_HEADER + WORLEY_FN + SMOKE_MAIN_CELLULAR,
     'Ridged':   SHADER_HEADER + RIDGED_FN + SMOKE_MAIN_RIDGED,
   },
   caustics: {
-    'Refraction':   SHADER_HEADER + CAUSTIC_FN + CAUSTICS_MAIN_DEFAULT,
+    'Refraction':   SHADER_HEADER + CAUSTICS_MAIN_DEFAULT,
     'Ripple':       SHADER_HEADER + CAUSTICS_MAIN_RIPPLE,
     'Interference': SHADER_HEADER + CAUSTICS_MAIN_INTERFERENCE,
   },
   contours: {
-    'Topographic': SHADER_HEADER + CONTOURS_MAIN_TOPO,
-    'Concentric':  SHADER_HEADER + CONTOURS_MAIN_CONCENTRIC,
-    'Spiral':      SHADER_HEADER + CONTOURS_MAIN_SPIRAL,
-    'Waveform':    SHADER_HEADER + CONTOURS_MAIN_WAVEFORM,
+    'Topographic': SHADER_HEADER + CONTOUR_HELPER + CONTOURS_MAIN_TOPO,
+    'Concentric':  SHADER_HEADER + CONTOUR_HELPER + CONTOURS_MAIN_CONCENTRIC,
+    'Spiral':      SHADER_HEADER + CONTOUR_HELPER + CONTOURS_MAIN_SPIRAL,
+    'Waveform':    SHADER_HEADER + CONTOUR_HELPER + CONTOURS_MAIN_WAVEFORM,
   },
   dye: {
     'Bloom':    SHADER_HEADER + DYE_MAIN_BLOOM,
@@ -1272,6 +1398,11 @@ function createParticleRenderer(canvas) {
       p.ax = Math.random() * 4 - 2;
       p.ay = Math.random() * 4 - 2;
       p.life = Infinity;
+    } else if (shape === 'Depth') {
+      p.z = Math.random();
+      p.dx = (Math.random() - 0.5) * 2;
+      p.dy = (Math.random() - 0.5) * 2;
+      p.life = Math.random() * 600 + 200;
     } else if (shape === 'Orbit') {
       const cx = W / 2, cy = H / 2;
       const ang = Math.random() * Math.PI * 2;
@@ -1340,6 +1471,24 @@ function createParticleRenderer(canvas) {
         p.ax = nx; p.ay = ny;
         p.x = cx + nx * viz;
         p.y = cy + ny * viz;
+      } else if (shape === 'Depth') {
+        if (p.z === undefined) { p.z = Math.random(); p.dx = (Math.random()-0.5)*2; p.dy = (Math.random()-0.5)*2; }
+        const nfreq = 0.5 / s.scale;
+        const nx = vnoise(p.dx * nfreq + t * 0.1, p.dy * nfreq);
+        const ny = vnoise(p.dx * nfreq, p.dy * nfreq + t * 0.1 + 500);
+        const angle = (nx + ny) * Math.PI * 2 * (1 + s.asymmetry * 0.5) + t * 0.1;
+        const moveSpeed = (0.3 + p.z * 1.7) * s.speed * 0.015;
+        p.dx += Math.cos(angle) * moveSpeed + s.flowX * moveSpeed * 1.5;
+        p.dy += Math.sin(angle) * moveSpeed + s.flowY * moveSpeed * 1.5;
+        p.z += s.speed * 0.0008;
+        if (p.z > 1 || Math.abs(p.dx) > 2.6 || Math.abs(p.dy) > 2.6) {
+          p.z = Math.random() * 0.3;
+          p.dx = (Math.random() - 0.5) * 2;
+          p.dy = (Math.random() - 0.5) * 2;
+        }
+        const persp = 0.4 + p.z * 1.6;
+        p.x = cx + p.dx * Math.min(W, H) * 0.3 * persp;
+        p.y = cy + p.dy * Math.min(W, H) * 0.3 * persp;
       } else if (shape === 'Vortex') {
         const dx = cx - p.x, dy = cy - p.y;
         const r = Math.max(2, Math.sqrt(dx * dx + dy * dy));
@@ -1385,10 +1534,20 @@ function createParticleRenderer(canvas) {
       const r = Math.round(pa[0] * (1 - m) + pb[0] * m);
       const g = Math.round(pa[1] * (1 - m) + pb[1] * m);
       const b = Math.round(pa[2] * (1 - m) + pb[2] * m);
-      const alpha = (shape === 'Attractor' ? 0.6 : Math.min(1, p.life / 80) * 0.85) * s.intensity;
+      let alpha, renderSize;
+      if (shape === 'Attractor') {
+        alpha = 0.6 * s.intensity;
+        renderSize = sizeBase;
+      } else if (shape === 'Depth') {
+        alpha = (0.25 + p.z * 0.75) * 0.9 * s.intensity;
+        renderSize = sizeBase * (0.3 + p.z * 2.2);
+      } else {
+        alpha = Math.min(1, p.life / 80) * 0.85 * s.intensity;
+        renderSize = sizeBase;
+      }
       ctx.fillStyle = `rgba(${r},${g},${b},${alpha})`;
       ctx.beginPath();
-      ctx.arc(p.x, p.y, sizeBase, 0, 6.283);
+      ctx.arc(p.x, p.y, renderSize, 0, 6.283);
       ctx.fill();
     }
     ctx.globalCompositeOperation = 'source-over';
@@ -1461,12 +1620,24 @@ function createWireframeRenderer(canvas) {
   const onResize = () => { resize(); rebuild(); };
   window.addEventListener('resize', onResize);
 
+  // Curl-noise drift: tiny 2D noise field so nodes trace gentle arcs rather
+  // than Brownian jitter. Result feels alive without ever settling.
+  function wfHash(x, y) { const h = Math.sin(x*127.1 + y*311.7) * 43758.5453; return h - Math.floor(h); }
+  function wfNoise(x, y) {
+    const xi = Math.floor(x), yi = Math.floor(y);
+    const xf = x - xi, yf = y - yi;
+    const u = xf*xf*(3-2*xf), v = yf*yf*(3-2*yf);
+    const a = wfHash(xi, yi), b = wfHash(xi+1, yi), c = wfHash(xi, yi+1), d = wfHash(xi+1, yi+1);
+    return (a*(1-u) + b*u) * (1-v) + (c*(1-u) + d*u) * v;
+  }
+
   let start = performance.now();
   function frame() {
     if (!running) return;
     const s = state.wireframe;
     const shape = s.shape || 'Mesh';
     const W = canvas.width, H = canvas.height;
+    const t = (performance.now() - start) / 1000;
 
     ctx.fillStyle = s.color1;
     ctx.fillRect(0, 0, W, H);
@@ -1474,21 +1645,27 @@ function createWireframeRenderer(canvas) {
     const baseSpeed = s.speed * dpr;
     const flowX = s.flowX * 0.4;
     const flowY = s.flowY * 0.4;
+    const nfreq = 0.0025;
 
     if (shape === 'Lattice') {
       for (const n of nodes) {
-        // spring back toward home position + flow + drift
-        n.vx += (n.hx - n.x) * 0.008 + flowX * 0.04 + (Math.random() - 0.5) * 0.04;
-        n.vy += (n.hy - n.y) * 0.008 + flowY * 0.04 + (Math.random() - 0.5) * 0.04;
+        const nx = wfNoise(n.x * nfreq + t * 0.15, n.y * nfreq);
+        const ny = wfNoise(n.x * nfreq, n.y * nfreq + t * 0.15 + 500);
+        const ang = (nx + ny) * Math.PI * 2;
+        n.vx += (n.hx - n.x) * 0.008 + flowX * 0.04 + Math.cos(ang) * 0.18;
+        n.vy += (n.hy - n.y) * 0.008 + flowY * 0.04 + Math.sin(ang) * 0.18;
         n.vx *= 0.93; n.vy *= 0.93;
         n.x += n.vx * baseSpeed;
         n.y += n.vy * baseSpeed;
       }
     } else {
       for (const n of nodes) {
-        n.vx += flowX * 0.05 + (Math.random() - 0.5) * 0.02;
-        n.vy += flowY * 0.05 + (Math.random() - 0.5) * 0.02;
-        n.vx *= 0.96; n.vy *= 0.96;
+        const nx = wfNoise(n.x * nfreq + t * 0.18, n.y * nfreq);
+        const ny = wfNoise(n.x * nfreq, n.y * nfreq + t * 0.18 + 500);
+        const ang = (nx + ny) * Math.PI * 2 + t * 0.05;
+        n.vx += flowX * 0.05 + Math.cos(ang) * 0.22;
+        n.vy += flowY * 0.05 + Math.sin(ang) * 0.22;
+        n.vx *= 0.95; n.vy *= 0.95;
         n.x += n.vx * baseSpeed;
         n.y += n.vy * baseSpeed;
         if (n.x < 0) n.x += W;
@@ -1497,6 +1674,9 @@ function createWireframeRenderer(canvas) {
         else if (n.y > H) n.y -= H;
       }
     }
+
+    // Whole-field shimmer: subtle global alpha pulse so the mesh breathes.
+    const shimmer = 0.85 + 0.15 * Math.sin(t * 0.6);
 
     const connectDist = s.connect * dpr;
     const lc = hexToRgbInt(s.color2);
@@ -1515,7 +1695,7 @@ function createWireframeRenderer(canvas) {
           const anisoFactor = 1 + ax * 0.6 * Math.cos(angle * 2);
           const effD = d / Math.max(0.3, anisoFactor);
           if (effD < connectDist) {
-            const alpha = Math.pow(1 - effD / connectDist, 1.3) * s.intensity;
+            const alpha = Math.pow(1 - effD / connectDist, 1.3) * s.intensity * shimmer;
             ctx.strokeStyle = `rgba(${lc[0]},${lc[1]},${lc[2]},${alpha})`;
             ctx.beginPath();
             ctx.moveTo(a.x, a.y);
@@ -1545,7 +1725,7 @@ function createWireframeRenderer(canvas) {
           const d = Math.sqrt(c.d2);
           if (d > connectDist) break;
           const b = nodes[c.j];
-          const alpha = Math.pow(1 - d / connectDist, 1.1) * s.intensity;
+          const alpha = Math.pow(1 - d / connectDist, 1.1) * s.intensity * shimmer;
           ctx.strokeStyle = `rgba(${lc[0]},${lc[1]},${lc[2]},${alpha})`;
           ctx.beginPath();
           ctx.moveTo(a.x, a.y);
@@ -1568,7 +1748,7 @@ function createWireframeRenderer(canvas) {
           const b = nodes[j];
           const dx = a.x - b.x, dy = a.y - b.y;
           const d = Math.sqrt(dx * dx + dy * dy);
-          const alpha = Math.min(1, 1 - d / (connectDist * 1.4)) * s.intensity;
+          const alpha = Math.min(1, 1 - d / (connectDist * 1.4)) * s.intensity * shimmer;
           if (alpha <= 0) continue;
           ctx.strokeStyle = `rgba(${lc[0]},${lc[1]},${lc[2]},${alpha})`;
           ctx.beginPath();
@@ -1699,7 +1879,7 @@ function createSplatterRenderer(canvas) {
         });
       }
     }
-    return { parts, age: 0, life: 700 + Math.random() * 500 };
+    return { parts, age: 0, life: 1800 + Math.random() * 1400 };
   }
 
   function frame() {
@@ -1710,7 +1890,8 @@ function createSplatterRenderer(canvas) {
     ctx.fillStyle = s.color1;
     ctx.fillRect(0, 0, W, H);
 
-    const spawnInterval = 1200 / (s.speed * 3 + 0.4);
+    // Slower spawn so patches bloom in rather than detonating all at once.
+    const spawnInterval = 2400 / (s.speed * 2 + 0.3);
     const now = performance.now();
     const maxCount = Math.floor(s.count);
     if (now - lastSpawn > spawnInterval && splatters.length < maxCount * 1.5) {
@@ -1725,10 +1906,17 @@ function createSplatterRenderer(canvas) {
     for (let si = 0; si < splatters.length; si++) {
       const splat = splatters[si];
       splat.age += 1;
-      const ratio = splat.age / splat.life;
-      if (ratio >= 1) continue;
-      const alpha = (1 - Math.pow(ratio, 2.5)) * s.intensity;
-      // mix between c2 and c3 deterministically by index
+      const tt = splat.age / splat.life;
+      if (tt >= 1) continue;
+      // Fade-in (20%), sustain (40%), fade-out (40%) — ink bleeding feel.
+      let env;
+      if (tt < 0.2) env = tt / 0.2;
+      else if (tt < 0.6) env = 1;
+      else env = (1 - tt) / 0.4;
+      env = Math.pow(env, 1.3);
+      const alpha = env * s.intensity;
+      // Per-splat radius growth: paint spreads outward as it absorbs.
+      const grow = 0.55 + Math.min(1, tt * 3) * 0.6;
       const mix = (si % 5) / 5;
       const r = Math.round(c2[0] * (1 - mix) + c3[0] * mix);
       const g = Math.round(c2[1] * (1 - mix) + c3[1] * mix);
@@ -1738,15 +1926,19 @@ function createSplatterRenderer(canvas) {
 
       for (const pt of splat.parts) {
         if (pt.type === 'streak') {
+          // Streaks appear once the splat has had a moment to land.
+          if (tt < 0.12) continue;
           ctx.lineWidth = pt.thickness * dpr;
           ctx.lineCap = 'round';
           ctx.beginPath();
           ctx.moveTo(pt.x1, pt.y1);
-          ctx.lineTo(pt.x1 + Math.cos(pt.angle) * pt.len, pt.y1 + Math.sin(pt.angle) * pt.len);
+          const streakProgress = Math.min(1, (tt - 0.12) * 3);
+          const drawLen = pt.len * streakProgress;
+          ctx.lineTo(pt.x1 + Math.cos(pt.angle) * drawLen, pt.y1 + Math.sin(pt.angle) * drawLen);
           ctx.stroke();
         } else {
           ctx.beginPath();
-          ctx.arc(pt.x, pt.y, pt.r, 0, 6.283);
+          ctx.arc(pt.x, pt.y, pt.r * grow, 0, 6.283);
           ctx.fill();
         }
       }
@@ -1825,16 +2017,20 @@ function createDripRenderer(canvas) {
     const paintColor = s.color2;
     const wobble = s.asymmetry * 12 * dpr;
 
-    // Top band with wavy bottom edge
+    // Band's wavy lower edge — drips must start from this curve, not bandH,
+    // or they detach when the band sags downward.
+    const bandBottom = (x) =>
+      bandH + Math.sin(x * 0.008 + t * 0.0006) * wobble
+            + Math.sin(x * 0.022 - t * 0.0009) * wobble * 0.4;
+
+    // Top band fill
     ctx.fillStyle = paintColor;
     ctx.beginPath();
     ctx.moveTo(0, 0);
     ctx.lineTo(W, 0);
     ctx.lineTo(W, bandH);
     for (let x = W; x >= 0; x -= 8) {
-      const y = bandH + Math.sin(x * 0.008 + t * 0.0006) * wobble
-              + Math.sin(x * 0.022 - t * 0.0009) * wobble * 0.4;
-      ctx.lineTo(x, y);
+      ctx.lineTo(x, bandBottom(x));
     }
     ctx.lineTo(0, bandH);
     ctx.closePath();
@@ -1853,7 +2049,7 @@ function createDripRenderer(canvas) {
       } else if (t > d.nextRelease && d.nextRelease > 0) {
         droplets.push({
           x: d.x,
-          y: bandH + d.currentLen,
+          y: bandBottom(d.x) + d.currentLen,
           vy: 0.5 * dpr,
           r: d.thickness * 0.6
         });
@@ -1867,51 +2063,54 @@ function createDripRenderer(canvas) {
       }
 
       ctx.lineWidth = d.thickness;
+      const topY = bandBottom(d.x);
 
       if (shape === 'Wobble') {
         const segs = Math.max(2, Math.floor(d.currentLen / 5));
         const amp = d.wobbleAmp * s.asymmetry;
-        let tipX = d.x;
+        let tipX = d.x, tipY = topY + d.currentLen;
         ctx.beginPath();
         for (let k = 0; k <= segs; k++) {
           const ty = (k / segs) * d.currentLen;
           const ramp = Math.min(1, ty / 40);
           const tx = d.x + Math.sin(ty * 0.04 + d.phase) * amp * ramp;
-          if (k === 0) ctx.moveTo(tx, bandH);
-          else ctx.lineTo(tx, bandH + ty);
-          if (k === segs) tipX = tx;
+          const yy = topY + ty;
+          if (k === 0) ctx.moveTo(tx, yy);
+          else ctx.lineTo(tx, yy);
+          if (k === segs) { tipX = tx; tipY = yy; }
         }
         ctx.stroke();
+        // Tip ball at the polyline's exact final point.
         ctx.beginPath();
-        ctx.arc(tipX, bandH + d.currentLen, d.thickness * 0.75, 0, 6.283);
+        ctx.arc(tipX, tipY, d.thickness * 0.78, 0, 6.283);
         ctx.fill();
       } else if (shape === 'Branch') {
         if (d.currentLen <= d.forkAt) {
           ctx.beginPath();
-          ctx.moveTo(d.x, bandH - 1);
-          ctx.lineTo(d.x, bandH + d.currentLen);
+          ctx.moveTo(d.x, topY - 1);
+          ctx.lineTo(d.x, topY + d.currentLen);
           ctx.stroke();
           ctx.beginPath();
           ctx.arc(d.x, bandH + d.currentLen, d.thickness * 0.75, 0, 6.283);
           ctx.fill();
         } else {
           ctx.beginPath();
-          ctx.moveTo(d.x, bandH - 1);
-          ctx.lineTo(d.x, bandH + d.forkAt);
+          ctx.moveTo(d.x, topY - 1);
+          ctx.lineTo(d.x, topY + d.forkAt);
           ctx.stroke();
           const beyond = d.currentLen - d.forkAt;
           const ax1 = d.forkAng1, ax2 = d.forkAng2;
           const x1 = d.x + Math.sin(ax1) * beyond;
-          const y1 = bandH + d.forkAt + Math.cos(ax1) * beyond;
+          const y1 = topY + d.forkAt + Math.cos(ax1) * beyond;
           const x2 = d.x + Math.sin(ax2) * beyond;
-          const y2 = bandH + d.forkAt + Math.cos(ax2) * beyond;
+          const y2 = topY + d.forkAt + Math.cos(ax2) * beyond;
           ctx.lineWidth = d.thickness * 0.7;
           ctx.beginPath();
-          ctx.moveTo(d.x, bandH + d.forkAt);
+          ctx.moveTo(d.x, topY + d.forkAt);
           ctx.lineTo(x1, y1);
           ctx.stroke();
           ctx.beginPath();
-          ctx.moveTo(d.x, bandH + d.forkAt);
+          ctx.moveTo(d.x, topY + d.forkAt);
           ctx.lineTo(x2, y2);
           ctx.stroke();
           ctx.beginPath();
@@ -1922,13 +2121,13 @@ function createDripRenderer(canvas) {
           ctx.fill();
         }
       } else {
-        // Vertical (default)
+        // Vertical (default) — slight tip bulge for paint feel.
         ctx.beginPath();
-        ctx.moveTo(d.x, bandH - 1);
-        ctx.lineTo(d.x, bandH + d.currentLen);
+        ctx.moveTo(d.x, topY - 1);
+        ctx.lineTo(d.x, topY + d.currentLen);
         ctx.stroke();
         ctx.beginPath();
-        ctx.arc(d.x, bandH + d.currentLen, d.thickness * 0.75, 0, 6.283);
+        ctx.arc(d.x, topY + d.currentLen, d.thickness * 0.8, 0, 6.283);
         ctx.fill();
       }
     }
@@ -2146,6 +2345,7 @@ function genParticlesCode(s) {
     var W=canvas.width, H=canvas.height;
     var p = { x: Math.random()*W, y: Math.random()*H, vx:0, vy:0, life: Math.random()*300+60, mix: Math.random() };
     if (shape === 'Attractor'){ p.ax = Math.random()*4-2; p.ay = Math.random()*4-2; p.life = Infinity; }
+    else if (shape === 'Depth'){ p.z = Math.random(); p.dx = (Math.random()-0.5)*2; p.dy = (Math.random()-0.5)*2; p.life = Math.random()*600+200; }
     else if (shape === 'Orbit'){
       var cx=W/2, cy=H/2; var ang = Math.random()*Math.PI*2;
       var r0 = 60 + Math.random()*Math.min(W,H)*0.3;
@@ -2176,6 +2376,23 @@ function genParticlesCode(s) {
         var nya = Math.sin(aB*p.ax) + aD*Math.cos(aB*p.ay);
         p.ax = nxa; p.ay = nya;
         p.x = cx + nxa*viz; p.y = cy + nya*viz;
+      } else if (shape === 'Depth'){
+        if (p.z === undefined){ p.z = Math.random(); p.dx = (Math.random()-0.5)*2; p.dy = (Math.random()-0.5)*2; }
+        var nfreq = 0.5/cfg.scale;
+        var nxd = vnoise(p.dx*nfreq + t*0.1, p.dy*nfreq);
+        var nyd = vnoise(p.dx*nfreq, p.dy*nfreq + t*0.1 + 500);
+        var ang = (nxd+nyd)*Math.PI*2*(1+cfg.asymmetry*0.5) + t*0.1;
+        var ms = (0.3 + p.z*1.7)*cfg.speed*0.015;
+        p.dx += Math.cos(ang)*ms + cfg.flowX*ms*1.5;
+        p.dy += Math.sin(ang)*ms + cfg.flowY*ms*1.5;
+        p.z += cfg.speed*0.0008;
+        if (p.z>1 || Math.abs(p.dx)>2.6 || Math.abs(p.dy)>2.6){
+          p.z = Math.random()*0.3;
+          p.dx = (Math.random()-0.5)*2; p.dy = (Math.random()-0.5)*2;
+        }
+        var persp = 0.4 + p.z*1.6;
+        p.x = cx + p.dx*Math.min(W,H)*0.3*persp;
+        p.y = cy + p.dy*Math.min(W,H)*0.3*persp;
       } else if (shape === 'Vortex'){
         var dx = cx-p.x, dy = cy-p.y;
         var r = Math.max(2, Math.sqrt(dx*dx+dy*dy));
@@ -2212,9 +2429,12 @@ function genParticlesCode(s) {
       var r3 = Math.round(pa[0]*(1-m)+pb[0]*m);
       var g3 = Math.round(pa[1]*(1-m)+pb[1]*m);
       var b3 = Math.round(pa[2]*(1-m)+pb[2]*m);
-      var a3 = (shape === 'Attractor' ? 0.6 : Math.min(1, p.life/80)*0.85) * cfg.intensity;
+      var a3, rs;
+      if (shape === 'Attractor'){ a3 = 0.6*cfg.intensity; rs = cfg.size*dpr; }
+      else if (shape === 'Depth'){ a3 = (0.25 + p.z*0.75)*0.9*cfg.intensity; rs = cfg.size*dpr*(0.3 + p.z*2.2); }
+      else { a3 = Math.min(1, p.life/80)*0.85*cfg.intensity; rs = cfg.size*dpr; }
       ctx.fillStyle = 'rgba('+r3+','+g3+','+b3+','+a3+')';
-      ctx.beginPath(); ctx.arc(p.x, p.y, cfg.size*dpr, 0, 6.283); ctx.fill();
+      ctx.beginPath(); ctx.arc(p.x, p.y, rs, 0, 6.283); ctx.fill();
     }
     ctx.globalCompositeOperation = 'source-over';
     requestAnimationFrame(frame);
@@ -2253,31 +2473,48 @@ function genWireframeCode(s) {
       for (var i=0; i<cfg.count; i++) nodes.push({ x:Math.random()*W, y:Math.random()*H, vx:(Math.random()-0.5)*0.4, vy:(Math.random()-0.5)*0.4 });
     }
   }
+  function wfHash(x,y){ var h=Math.sin(x*127.1+y*311.7)*43758.5453; return h-Math.floor(h); }
+  function wfNoise(x,y){
+    var xi=Math.floor(x), yi=Math.floor(y), xf=x-xi, yf=y-yi;
+    var u=xf*xf*(3-2*xf), v=yf*yf*(3-2*yf);
+    var a=wfHash(xi,yi), b=wfHash(xi+1,yi), c=wfHash(xi,yi+1), d=wfHash(xi+1,yi+1);
+    return (a*(1-u)+b*u)*(1-v) + (c*(1-u)+d*u)*v;
+  }
   window.addEventListener('resize', resize); resize();
+  var start = performance.now();
   function frame(){
     var W=canvas.width, H=canvas.height;
+    var t = (performance.now()-start)/1000;
     ctx.fillStyle = cfg.color1; ctx.fillRect(0,0,W,H);
     var sp = cfg.speed*dpr;
     var fx = cfg.flowX*0.4, fy = cfg.flowY*0.4;
+    var nfreq = 0.0025;
     if (shape === 'Lattice'){
       for (var i=0; i<nodes.length; i++){
         var n=nodes[i];
-        n.vx += (n.hx-n.x)*0.008 + fx*0.04 + (Math.random()-0.5)*0.04;
-        n.vy += (n.hy-n.y)*0.008 + fy*0.04 + (Math.random()-0.5)*0.04;
+        var nx = wfNoise(n.x*nfreq + t*0.15, n.y*nfreq);
+        var ny = wfNoise(n.x*nfreq, n.y*nfreq + t*0.15 + 500);
+        var ang = (nx+ny)*Math.PI*2;
+        n.vx += (n.hx-n.x)*0.008 + fx*0.04 + Math.cos(ang)*0.18;
+        n.vy += (n.hy-n.y)*0.008 + fy*0.04 + Math.sin(ang)*0.18;
         n.vx *= 0.93; n.vy *= 0.93;
         n.x += n.vx*sp; n.y += n.vy*sp;
       }
     } else {
       for (var i=0; i<nodes.length; i++){
         var n=nodes[i];
-        n.vx += fx*0.05 + (Math.random()-0.5)*0.02;
-        n.vy += fy*0.05 + (Math.random()-0.5)*0.02;
-        n.vx *= 0.96; n.vy *= 0.96;
+        var nx = wfNoise(n.x*nfreq + t*0.18, n.y*nfreq);
+        var ny = wfNoise(n.x*nfreq, n.y*nfreq + t*0.18 + 500);
+        var ang = (nx+ny)*Math.PI*2 + t*0.05;
+        n.vx += fx*0.05 + Math.cos(ang)*0.22;
+        n.vy += fy*0.05 + Math.sin(ang)*0.22;
+        n.vx *= 0.95; n.vy *= 0.95;
         n.x += n.vx*sp; n.y += n.vy*sp;
         if (n.x<0) n.x+=W; else if (n.x>W) n.x-=W;
         if (n.y<0) n.y+=H; else if (n.y>H) n.y-=H;
       }
     }
+    var shimmer = 0.85 + 0.15*Math.sin(t*0.6);
     var cd = cfg.connect*dpr, ax = cfg.asymmetry;
     ctx.lineWidth = cfg.size*dpr; ctx.lineCap = 'round';
     if (shape === 'Mesh'){
@@ -2289,7 +2526,7 @@ function genWireframeCode(s) {
           var ang=Math.atan2(dy,dx); var an=1+ax*0.6*Math.cos(ang*2);
           var ed = d/Math.max(0.3, an);
           if (ed<cd){
-            var al = Math.pow(1-ed/cd, 1.3)*cfg.intensity;
+            var al = Math.pow(1-ed/cd, 1.3)*cfg.intensity*shimmer;
             ctx.strokeStyle = 'rgba('+lc[0]+','+lc[1]+','+lc[2]+','+al+')';
             ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
           }
@@ -2311,7 +2548,7 @@ function genWireframeCode(s) {
           var c = cands[k]; if (c.j<i) continue;
           var d = Math.sqrt(c.d2); if (d>cd) break;
           var b = nodes[c.j];
-          var al = Math.pow(1-d/cd, 1.1)*cfg.intensity;
+          var al = Math.pow(1-d/cd, 1.1)*cfg.intensity*shimmer;
           ctx.strokeStyle = 'rgba('+lc[0]+','+lc[1]+','+lc[2]+','+al+')';
           ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
         }
@@ -2327,7 +2564,7 @@ function genWireframeCode(s) {
           if (j === undefined) continue;
           var b = nodes[j];
           var dx=a.x-b.x, dy=a.y-b.y; var d=Math.sqrt(dx*dx+dy*dy);
-          var al = Math.min(1, 1 - d/(cd*1.4))*cfg.intensity;
+          var al = Math.min(1, 1 - d/(cd*1.4))*cfg.intensity*shimmer;
           if (al<=0) continue;
           ctx.strokeStyle = 'rgba('+lc[0]+','+lc[1]+','+lc[2]+','+al+')';
           ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
@@ -2404,19 +2641,25 @@ function genSplatterCode(s) {
                      angle:a, len:sm*(4+Math.random()*8), thickness:1.2+Math.random()*2.5 });
       }
     }
-    return { parts: parts, age: 0, life: 700 + Math.random()*500 };
+    return { parts: parts, age: 0, life: 1800 + Math.random()*1400 };
   }
   function frame(){
     var W=canvas.width, H=canvas.height;
     ctx.fillStyle = cfg.color1; ctx.fillRect(0,0,W,H);
-    var si = 1200/(cfg.speed*3+0.4); var now = performance.now();
+    var si = 2400/(cfg.speed*2+0.3); var now = performance.now();
     if (now-lastSpawn > si && splats.length < cfg.count*1.5){
       splats.push(makeSplat(Math.random()*W, Math.random()*H)); lastSpawn = now;
     }
     while (splats.length > cfg.count) splats.shift();
     for (var i=0; i<splats.length; i++){
-      var sp = splats[i]; sp.age++; var rt = sp.age/sp.life; if (rt>=1) continue;
-      var al = (1-Math.pow(rt,2.5))*cfg.intensity;
+      var sp = splats[i]; sp.age++; var tt = sp.age/sp.life; if (tt>=1) continue;
+      var env;
+      if (tt < 0.2) env = tt/0.2;
+      else if (tt < 0.6) env = 1;
+      else env = (1-tt)/0.4;
+      env = Math.pow(env, 1.3);
+      var al = env*cfg.intensity;
+      var grow = 0.55 + Math.min(1, tt*3)*0.6;
       var mx = (i%5)/5;
       var r = Math.round(c2[0]*(1-mx)+c3[0]*mx);
       var g = Math.round(c2[1]*(1-mx)+c3[1]*mx);
@@ -2426,11 +2669,14 @@ function genSplatterCode(s) {
       for (var p=0; p<sp.parts.length; p++){
         var pt = sp.parts[p];
         if (pt.type==='streak'){
+          if (tt < 0.12) continue;
           ctx.lineWidth = pt.thickness*dpr; ctx.lineCap='round';
+          var sprog = Math.min(1, (tt-0.12)*3);
+          var dlen = pt.len * sprog;
           ctx.beginPath(); ctx.moveTo(pt.x1, pt.y1);
-          ctx.lineTo(pt.x1+Math.cos(pt.angle)*pt.len, pt.y1+Math.sin(pt.angle)*pt.len); ctx.stroke();
+          ctx.lineTo(pt.x1+Math.cos(pt.angle)*dlen, pt.y1+Math.sin(pt.angle)*dlen); ctx.stroke();
         } else {
-          ctx.beginPath(); ctx.arc(pt.x, pt.y, pt.r, 0, 6.283); ctx.fill();
+          ctx.beginPath(); ctx.arc(pt.x, pt.y, pt.r*grow, 0, 6.283); ctx.fill();
         }
       }
     }
@@ -2482,20 +2728,21 @@ function genDripCode(s) {
     ctx.fillStyle = cfg.color1; ctx.fillRect(0,0,W,H);
     var bandH = H*cfg.bandHeight;
     var wob = cfg.asymmetry*12*dpr;
+    function bandBottom(x){
+      return bandH + Math.sin(x*0.008+t*0.0006)*wob + Math.sin(x*0.022-t*0.0009)*wob*0.4;
+    }
     ctx.fillStyle = cfg.color2;
     ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(W,0); ctx.lineTo(W,bandH);
-    for (var x=W; x>=0; x-=8){
-      var y = bandH + Math.sin(x*0.008+t*0.0006)*wob + Math.sin(x*0.022-t*0.0009)*wob*0.4;
-      ctx.lineTo(x,y);
-    }
+    for (var x=W; x>=0; x-=8){ ctx.lineTo(x, bandBottom(x)); }
     ctx.lineTo(0,bandH); ctx.closePath(); ctx.fill();
     ctx.strokeStyle = cfg.color2; ctx.lineCap = 'round';
     var gr = cfg.speed*1.2;
     for (var i=0; i<drips.length; i++){
       var d = drips[i];
+      var topY = bandBottom(d.x);
       if (d.currentLen < d.maxLen){ d.currentLen += d.growthSpeed*gr; }
       else if (t > d.nextRelease && d.nextRelease > 0){
-        droplets.push({ x:d.x, y:bandH+d.currentLen, vy:0.5*dpr, r:d.thickness*0.6 });
+        droplets.push({ x:d.x, y:topY+d.currentLen, vy:0.5*dpr, r:d.thickness*0.6 });
         d.currentLen = 5*dpr;
         var newMax = (50+Math.random()*280*(1+cfg.asymmetry*0.5))*dpr*cfg.scale;
         d.maxLen = newMax;
@@ -2508,35 +2755,36 @@ function genDripCode(s) {
       if (shape === 'Wobble'){
         var segs = Math.max(2, Math.floor(d.currentLen/5));
         var amp = d.wobbleAmp * cfg.asymmetry;
-        var tipX = d.x;
+        var tipX = d.x, tipY = topY + d.currentLen;
         ctx.beginPath();
         for (var k=0; k<=segs; k++){
           var ty = (k/segs)*d.currentLen;
           var ramp = Math.min(1, ty/40);
           var tx = d.x + Math.sin(ty*0.04 + d.phase)*amp*ramp;
-          if (k===0) ctx.moveTo(tx, bandH); else ctx.lineTo(tx, bandH+ty);
-          if (k===segs) tipX = tx;
+          var yy = topY + ty;
+          if (k===0) ctx.moveTo(tx, yy); else ctx.lineTo(tx, yy);
+          if (k===segs) { tipX = tx; tipY = yy; }
         }
         ctx.stroke();
-        ctx.beginPath(); ctx.arc(tipX, bandH+d.currentLen, d.thickness*0.75, 0, 6.283); ctx.fill();
+        ctx.beginPath(); ctx.arc(tipX, tipY, d.thickness*0.78, 0, 6.283); ctx.fill();
       } else if (shape === 'Branch'){
         if (d.currentLen <= d.forkAt){
-          ctx.beginPath(); ctx.moveTo(d.x, bandH-1); ctx.lineTo(d.x, bandH+d.currentLen); ctx.stroke();
-          ctx.beginPath(); ctx.arc(d.x, bandH+d.currentLen, d.thickness*0.75, 0, 6.283); ctx.fill();
+          ctx.beginPath(); ctx.moveTo(d.x, topY-1); ctx.lineTo(d.x, topY+d.currentLen); ctx.stroke();
+          ctx.beginPath(); ctx.arc(d.x, topY+d.currentLen, d.thickness*0.78, 0, 6.283); ctx.fill();
         } else {
-          ctx.beginPath(); ctx.moveTo(d.x, bandH-1); ctx.lineTo(d.x, bandH+d.forkAt); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(d.x, topY-1); ctx.lineTo(d.x, topY+d.forkAt); ctx.stroke();
           var beyond = d.currentLen - d.forkAt;
-          var x1 = d.x + Math.sin(d.forkAng1)*beyond, y1 = bandH+d.forkAt + Math.cos(d.forkAng1)*beyond;
-          var x2 = d.x + Math.sin(d.forkAng2)*beyond, y2 = bandH+d.forkAt + Math.cos(d.forkAng2)*beyond;
+          var x1 = d.x + Math.sin(d.forkAng1)*beyond, y1 = topY+d.forkAt + Math.cos(d.forkAng1)*beyond;
+          var x2 = d.x + Math.sin(d.forkAng2)*beyond, y2 = topY+d.forkAt + Math.cos(d.forkAng2)*beyond;
           ctx.lineWidth = d.thickness*0.7;
-          ctx.beginPath(); ctx.moveTo(d.x, bandH+d.forkAt); ctx.lineTo(x1, y1); ctx.stroke();
-          ctx.beginPath(); ctx.moveTo(d.x, bandH+d.forkAt); ctx.lineTo(x2, y2); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(d.x, topY+d.forkAt); ctx.lineTo(x1, y1); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(d.x, topY+d.forkAt); ctx.lineTo(x2, y2); ctx.stroke();
           ctx.beginPath(); ctx.arc(x1, y1, d.thickness*0.55, 0, 6.283); ctx.fill();
           ctx.beginPath(); ctx.arc(x2, y2, d.thickness*0.55, 0, 6.283); ctx.fill();
         }
       } else {
-        ctx.beginPath(); ctx.moveTo(d.x, bandH-1); ctx.lineTo(d.x, bandH+d.currentLen); ctx.stroke();
-        ctx.beginPath(); ctx.arc(d.x, bandH+d.currentLen, d.thickness*0.75, 0, 6.283); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(d.x, topY-1); ctx.lineTo(d.x, topY+d.currentLen); ctx.stroke();
+        ctx.beginPath(); ctx.arc(d.x, topY+d.currentLen, d.thickness*0.8, 0, 6.283); ctx.fill();
       }
     }
     for (var i=droplets.length-1; i>=0; i--){
